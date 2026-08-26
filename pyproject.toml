@@ -2,7 +2,7 @@
 name = "dispatch"
 version = "0.1.0"
 description = "Case dispatch engine for service-level-driven workload allocation"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = []
 
 [project.optional-dependencies]
@@ -17,7 +17,7 @@ packages = ["src/dispatch"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

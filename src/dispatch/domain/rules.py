@@ -92,8 +92,8 @@ def lot_size(
     remaining = max(0.0, allocated_minutes - minutes_worked)
     if remaining <= 0:
         return 0.0
-    return max(policy.lot_min_minutes, min(policy.lot_max_minutes, remaining * policy.lot_share_of_remaining, remaining))
-
+    share = remaining * policy.lot_share_of_remaining
+    return max(policy.lot_min_minutes, min(policy.lot_max_minutes, share, remaining))
 
 def can_be_trusted_with_urgency(worker: Caseworker) -> bool:
     return worker.trusted

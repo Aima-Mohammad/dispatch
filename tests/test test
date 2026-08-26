@@ -1,5 +1,0 @@
-New-Item -ItemType Directory -Force -Path tests | Out-Null
-@"
-def test_placeholder() -> None:
-    assert True
-"@ | Set-Content -Encoding UTF8 tests\test_placeholder.py

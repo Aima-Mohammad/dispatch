@@ -1,10 +1,12 @@
 from datetime import date
 
+from dispatch.domain.rules import slack
 from dispatch.sim.fixtures import ACT_TYPES, CASEWORKERS, make_backlog
 
-from dispatch.domain.rules import slack
-
 TODAY = date(2026, 8, 25)
+
+
+
 
 
 def test_backlog_is_deterministic() -> None:

@@ -15,6 +15,9 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/dispatch"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"src/dispatch/py.typed" = "dispatch/py.typed"
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
@@ -25,6 +28,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.mypy]
 strict = true
 files = ["src", "tests"]
+
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -33,4 +33,4 @@ testpaths = ["tests"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-cov", "ruff>=0.6", "mypy>=1.11"]
-app = ["streamlit>=1.39"]
+app = ["streamlit>=1.39", "plotly>=5.24"]

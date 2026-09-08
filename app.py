@@ -314,6 +314,7 @@ def cell(
         f"<span>{act.points:g} pts</span></span>"
     )
 
+
 def cell_row(
     items: list[WorkItem],
     session: DaySession,
@@ -1067,7 +1068,7 @@ def render_performance(session: DaySession) -> None:
             legend=dict(orientation="h", y=-0.28, x=0, font=dict(size=10)),
             yaxis_title="actes",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key="perf-distributed")
 
     # ---- Where the backlog is ageing --------------------------------------
 
@@ -1090,7 +1091,7 @@ def render_performance(session: DaySession) -> None:
         fig2.update_layout(
             height=320, margin=dict(l=0, r=0, t=10, b=0), yaxis_title="actes"
         )
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, use_container_width=True, key="perf-stock-tiers")
 
     with right:
         st.markdown("#### Où est le retard")
@@ -1112,7 +1113,7 @@ def render_performance(session: DaySession) -> None:
                 margin=dict(l=0, r=0, t=10, b=0),
                 legend=dict(orientation="h", y=-0.15, font=dict(size=10)),
             )
-            st.plotly_chart(fig3, use_container_width=True)
+            st.plotly_chart(fig3, use_container_width=True, key="perf-late-mix")
         else:
             st.success("Aucun dossier en retard dans le stock.")
 
@@ -1140,52 +1141,7 @@ def render_performance(session: DaySession) -> None:
             margin=dict(l=0, r=0, t=10, b=0),
             xaxis_title="dossiers",
         )
-        st.plotly_chart(fig4, use_container_width=True)
-    def yield_of(code: str) -> float:
-        return ACT_TYPES[code].points * 60 / effective_minutes(ACT_TYPES[code], 2)
-
-    codes = sorted(ACT_TYPES, key=lambda c: -yield_of(c))
-    yields = [yield_of(c) for c in codes]
-    fig6 = go.Figure()
-    fig6.add_bar(
-        x=[ACT_TYPES[c].label for c in codes],
-        y=yields,
-        marker_color=["#1f7a4d" if y >= 14.29 else "#e8951a" for y in yields],
-        text=[f"{y:.1f}" for y in yields],
-        textposition="outside",
-    )
-    fig6.add_hline(y=14.29, line_dash="dash", line_color=BRAND)
-    fig6.update_layout(
-        height=320,
-        margin=dict(l=0, r=0, t=10, b=0),
-        yaxis_title="points par heure",
-        showlegend=False,
-    )
-    #st.plotly_chart(fig6, use_container_width=True)
-
-    if session.held:
-        st.markdown("#### Dossiers en attente")
-        st.caption(
-            "Par motif. Une hausse durable des pièces manquantes est un problème "
-            "de complétude en entrée, pas de répartition."
-        )
-        reasons = session.held_by_reason
-        fig7 = go.Figure(
-            go.Bar(
-                x=[len(v) for v in reasons.values()],
-                y=[HOLD_LABELS[k] for k in reasons],
-                orientation="h",
-                marker_color="#8c9aa4",
-                text=[len(v) for v in reasons.values()],
-                textposition="outside",
-            )
-        )
-        fig7.update_layout(
-            height=max(200, 44 * len(reasons)),
-            margin=dict(l=0, r=0, t=10, b=0),
-            xaxis_title="dossiers",
-        )
-        st.plotly_chart(fig7, use_container_width=True)
+        st.plotly_chart(fig4, use_container_width=True, key="perf-held-reasons")
 
     st.markdown("#### Stock par activité")
     rows = []
@@ -1318,7 +1274,7 @@ def render_tomorrow(session: DaySession) -> None:
         )
     )
     fig.update_layout(height=300, margin=dict(l=0, r=0, t=10, b=0), yaxis_title="actes")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key="tomorrow-stock")
 
     st.markdown("<hr class='rule'/>", unsafe_allow_html=True)
     st.markdown("#### Temps alloué et premier lot")
@@ -1444,6 +1400,7 @@ def render_tomorrow(session: DaySession) -> None:
         st.markdown(
             "<hr class='rule' style='margin:.4rem 0 1rem'/>", unsafe_allow_html=True
         )
+
 
 # --------------------------------------------------------------------------
 # Home

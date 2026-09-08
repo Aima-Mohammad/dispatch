@@ -81,12 +81,17 @@ def draw_lot(
     picked: list[WorkItem] = []
     used = 0.0
 
-    def sort_key(item: WorkItem) -> tuple[int, int, int, float]:
+    def sort_key(item: WorkItem, floor: int) -> tuple[int, int, int, float]:
+        """Within `slack_tolerance_days` of the most urgent case available,
+        yield decides — that is where the engine can protect someone whose mix
+        would otherwise leave them short of their points target."""
         act = types[item.type_code]
+        days = slack(today, item.due_on)
+        band = 0 if days <= floor + policy.slack_tolerance_days else days
         yield_ = points_per_hour(act, ctx.level, policy)
         return (
             0 if item.pushed else 1,
-            slack(today, item.due_on),
+            band,
             0 if item.type_code in in_lot else 1,
             -yield_ if behind else yield_,
         )
@@ -102,7 +107,10 @@ def draw_lot(
         ]
         if not available:
             break
-        chosen = min(available, key=sort_key)
+        floor = min(slack(today, i.due_on) for i in available if not i.pushed) if any(
+            not i.pushed for i in available
+        ) else 0
+        chosen = min(available, key=lambda i: sort_key(i, floor))
         chosen.assigned_to = ctx.caseworker_id
         picked.append(chosen)
         in_lot.add(chosen.type_code)

@@ -28,17 +28,19 @@ ACT_TYPES: dict[str, ActType] = {
     )
 }
 
+# Roughly 30 cases per caseworker per day, which is what the team actually
+# handles. The mix leans on the shorter acts, as the real flow does.
 DAILY_ARRIVALS: dict[str, int] = {
-    "PRE": 24,
-    "REP": 36,
-    "MAJ": 24,
-    "COT": 20,
-    "ADH": 27,
-    "RAD": 15,
-    "CGR": 13,
-    "NCF": 22,
-    "RECL": 16,
-    "DEC": 9,
+    "PRE": 60,
+    "REP": 48,
+    "MAJ": 40,
+    "COT": 34,
+    "ADH": 30,
+    "RAD": 26,
+    "CGR": 20,
+    "NCF": 18,
+    "RECL": 12,
+    "DEC": 8,
 }
 
 CASEWORKERS: tuple[Caseworker, ...] = (
@@ -67,15 +69,20 @@ def _add_business_days(start: date, days: int) -> date:
 
 
 def make_backlog(today: date, seed: int = 42, overdue_share: float = 0.12) -> list[WorkItem]:
-    """A plausible backlog: cases that arrived on previous days, whose due date
-    derives from the SLA of their type. A share is already past due."""
+    """A plausible backlog: several days of arrivals, each with the due date
+    its type implies. A share is already past due.
+
+    Volumes are per day, so a case type present in the flow for `sla_days`
+    days appears that many times over — otherwise the stock would be thinner
+    than a single day of work.
+    """
     rng = random.Random(seed)
     items: list[WorkItem] = []
     counter = 0
     for act in ACT_TYPES.values():
         volume = DAILY_ARRIVALS[act.code]
         for back in range(act.sla_days + 1):
-            count = round(volume * (0.9 + rng.random() * 0.4) / (act.sla_days + 1))
+            count = round(volume * (0.9 + rng.random() * 0.4))
             for _ in range(count):
                 late = rng.random() < overdue_share
                 offset = act.sla_days - back - (rng.randint(2, 4) if late else 0)

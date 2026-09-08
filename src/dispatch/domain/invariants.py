@@ -55,7 +55,7 @@ def check_draw(
                     continue
                 if not is_cleared(types[item.type_code], ctx.level):
                     continue
-                if slack(today, item.due_on) >= worst:
+                if slack(today, item.due_on) >= worst - policy.slack_tolerance_days:
                     continue
                 fits = effective_minutes(types[item.type_code], ctx.level, policy)
                 if draw.minutes + fits <= _budget(ctx, types, policy) + 1e-6:

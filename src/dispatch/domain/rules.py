@@ -27,6 +27,7 @@ class Policy:
     lot_min_minutes: int = 15
     lot_max_minutes: int = 120
     refill_ratio: float = 0.6
+    slack_tolerance_days: int = 1
 
 
 DEFAULT_POLICY = Policy(level_coefficient={1: 1.30, 2: 1.00, 3: 0.85})
@@ -93,7 +94,7 @@ def lot_size(
     if remaining <= 0:
         return 0.0
     share = remaining * policy.lot_share_of_remaining
-    return max(policy.lot_min_minutes, min(policy.lot_max_minutes, share, remaining))
+    return min(policy.lot_max_minutes, max(policy.lot_min_minutes, share), remaining)
 
 def can_be_trusted_with_urgency(worker: Caseworker) -> bool:
     return worker.trusted

@@ -1,7 +1,8 @@
 """Manager view: today's load, the two bins, performance, and tomorrow.
 
 The manager sets allocated time, pushes urgencies and watches the backlog.
-What he never does is decide the order of a caseworker's lot — see decision 3.5.
+What he never does is decide the order of a caseworker's lot (decision 3.5),
+nor wake a held case (decision 3.11).
 """
 
 from __future__ import annotations
@@ -26,7 +27,6 @@ from views.ui import (
     BRAND,
     HOLD_LABELS,
     INK,
-    OVERTIME,
     STONE,
     TODAY,
     URGENT,
@@ -106,14 +106,12 @@ def render_today(session: DaySession) -> None:
     m[4].metric("Corbeille", len(session.urgency_bin))
     m[5].metric("En attente", len(session.held))
 
-    tools = st.columns([1, 1, 1, 1, 4])
+    tools = st.columns([1, 1, 1, 5])
     with tools[0]:
         help_note("urgency")
     with tools[1]:
         help_note("allocation")
     with tools[2]:
-        help_note("overtime")
-    with tools[3]:
         help_note("points")
 
     bar = st.columns([1, 1, 6])
@@ -295,12 +293,12 @@ def render_today(session: DaySession) -> None:
     tier_legend()
     st.markdown(
         "<div class='muted' style='margin-top:.6rem'>Gestionnaire · temps alloué · "
-        "heures sup · traités sur reçus · points et fin au plus tôt</div>",
+        "traités sur reçus · points et fin au plus tôt</div>",
         unsafe_allow_html=True,
     )
 
     for worker_id, state in session.workers.items():
-        head = st.columns([1.8, 1.1, 1, 1.3, 1.5, 1])
+        head = st.columns([1.8, 1.1, 1.3, 1.5, 1])
         tag = "confiance" if state.worker.trusted else f"niv. {state.worker.level}"
         head[0].markdown(
             f"<b style='font-size:.88rem'>{state.worker.display_name}</b><br>"
@@ -321,24 +319,10 @@ def render_today(session: DaySession) -> None:
             returned = session.set_allocation(worker_id, choice)
             st.toast(f"{state.worker.display_name} — {returned} acte(s) rendus au stock")
             st.rerun()
-        extra_time = head[2].selectbox(
-            "Heures sup",
-            OVERTIME,
-            index=OVERTIME.index(state.overtime_minutes)
-            if state.overtime_minutes in OVERTIME
-            else 0,
-            format_func=lambda m: "—" if m == 0 else f"+{m} min",
-            key=f"ot-{worker_id}",
-            label_visibility="collapsed",
-            disabled=not state.on_perimeter,
-        )
-        if extra_time != state.overtime_minutes:
-            session.set_overtime(worker_id, extra_time)
-            st.rerun()
 
         received = len(state.done) + len(state.queue)
         pushed = sum(1 for i in state.done + state.queue if i.pushed)
-        head[3].markdown(
+        head[2].markdown(
             f"<span style='font-size:.82rem'>{len(state.done)}/{received}</span><br>"
             f"<span class='muted'>{pushed} urgence(s)</span>",
             unsafe_allow_html=True,
@@ -348,14 +332,14 @@ def render_today(session: DaySession) -> None:
         end = state.earliest_end
         over = end > DAY_END_MINUTES
         note = f"fin ≥ {clock_label(min(end, 1439))}" if state.on_perimeter else "—"
-        head[4].markdown(
+        head[3].markdown(
             f"<span style='font-size:.82rem'>{points:.0f}/{target:.0f} · "
             f"{rate if state.minutes_worked else '—'} %</span><br>"
             f"<span class='muted' style='color:{BRAND if over else STONE}'>"
             f"{note}</span>",
             unsafe_allow_html=True,
         )
-        with head[5].popover("Détail"):
+        with head[4].popover("Détail"):
             render_lot_detail(session, state)
 
         if not state.on_perimeter:
@@ -416,9 +400,10 @@ def render_bins(session: DaySession) -> None:
 
     with waiting:
         st.caption(
-            "Hors flux tant que la pièce manque, mais le délai continue de courir. "
-            "La mise en attente et le réveil appartiennent au gestionnaire — "
-            "n'intervenez que sur les dossiers qui traînent."
+            "Hors flux tant que la pièce manque, mais le délai continue de "
+            "courir. La mise en attente et le réveil appartiennent au "
+            "gestionnaire, qui dispose de sa propre corbeille. Vous voyez sans "
+            "agir ; déléguer renvoie un dossier bloqué au premier habilité."
         )
         if not session.held:
             st.info("Aucun dossier en attente.")
@@ -449,10 +434,12 @@ def render_bins(session: DaySession) -> None:
                     f"<span class='muted'>{who} · {tier_label(days)}</span>",
                     unsafe_allow_html=True,
                 )
-                if cols[3].button("Réveiller", key=f"wake-{item.id}"):
-                    session.resume(item.id, origin)
-                    st.toast(f"{item.reference} réactivé chez {who}")
-                    st.rerun()
+                cols[3].markdown(
+                    "<span class='muted' style='color:"
+                    f"{BRAND if days < 0 else STONE}'>"
+                    f"{'en retard' if days < 0 else ''}</span>",
+                    unsafe_allow_html=True,
+                )
                 if cols[4].button("Déléguer", key=f"deleg-{item.id}"):
                     session.resume(item.id, None)
                     st.toast(f"{item.reference} renvoyé en corbeille")
@@ -660,6 +647,8 @@ def render_tomorrow(session: DaySession) -> None:
     nobody took are still there in the morning.
     """
     tomorrow_date = TODAY + timedelta(days=1)
+    # The plan stays a pair for preview_first_lots, whose second slot is no
+    # longer set from this screen.
     tomorrow = st.session_state.setdefault(
         "tomorrow",
         {i: (s.allocated_minutes, 0) for i, s in session.workers.items()},
@@ -697,8 +686,7 @@ def render_tomorrow(session: DaySession) -> None:
     if cover < 100:
         st.warning(
             f"Il manque {hm(need_minutes - capacity)} pour traiter demain tout ce "
-            "qui sera échu ou en retard. Ajustez les temps alloués ou les heures "
-            "supplémentaires."
+            "qui sera échu ou en retard. Ajustez les temps alloués."
         )
     else:
         st.success(
@@ -798,19 +786,19 @@ def render_tomorrow(session: DaySession) -> None:
         st.rerun()
     if quick[1].button("Copier aujourd'hui", use_container_width=True):
         for worker_id, state in session.workers.items():
-            tomorrow[worker_id] = (state.allocated_minutes, state.overtime_minutes)
+            tomorrow[worker_id] = (state.allocated_minutes, 0)
         st.rerun()
 
     tier_legend()
     st.markdown(
         "<div class='muted' style='margin-top:.6rem'>Gestionnaire · temps alloué · "
-        "heures sup · cible · fin au plus tôt · premier lot</div>",
+        "cible · fin au plus tôt · premier lot</div>",
         unsafe_allow_html=True,
     )
 
     for worker_id, state in session.workers.items():
-        allocated, overtime = tomorrow[worker_id]
-        head = st.columns([1.8, 1.1, 1, 1.3, 1.5, 1.3])
+        allocated, _ = tomorrow[worker_id]
+        head = st.columns([1.8, 1.1, 1.3, 1.5, 1.3])
         tag = "confiance" if state.worker.trusted else f"niv. {state.worker.level}"
         head[0].markdown(
             f"<b style='font-size:.88rem'>{state.worker.display_name}</b><br>"
@@ -825,44 +813,35 @@ def render_tomorrow(session: DaySession) -> None:
             key=f"tom-alloc-{worker_id}",
             label_visibility="collapsed",
         )
-        new_overtime = head[2].selectbox(
-            "Heures sup",
-            OVERTIME,
-            index=OVERTIME.index(overtime) if overtime in OVERTIME else 0,
-            format_func=lambda m: "—" if m == 0 else f"+{m} min",
-            key=f"tom-ot-{worker_id}",
-            label_visibility="collapsed",
-            disabled=new_allocated == 0,
-        )
-        if (new_allocated, new_overtime) != (allocated, overtime):
-            tomorrow[worker_id] = (new_allocated, new_overtime)
+        if new_allocated != allocated:
+            tomorrow[worker_id] = (new_allocated, 0)
             st.rerun()
 
-        working = new_allocated + new_overtime
+        working = new_allocated
         items = preview.get(worker_id, [])
         pts = sum(ACT_TYPES[i.type_code].points for i in items)
         urgent_here = sum(1 for i in items if slack(tomorrow_date, i.due_on) <= 0)
 
-        head[3].markdown(
+        head[2].markdown(
             f"<span style='font-size:.82rem'>{pts:.0f}/"
             f"{target_points(working):.0f} pts</span><br>"
             f"<span class='muted'>au premier lot</span>",
             unsafe_allow_html=True,
         )
         if working == 0:
-            head[4].markdown(
+            head[3].markdown(
                 "<span class='muted'>hors périmètre</span>", unsafe_allow_html=True
             )
         else:
             end = DAY_START_MINUTES + working + ASSUMED_LUNCH_MINUTES
             over = end > DAY_END_MINUTES
-            head[4].markdown(
+            head[3].markdown(
                 f"<span style='font-size:.82rem;color:{BRAND if over else INK}'>"
                 f"fin ≥ {clock_label(min(end, 1439))}</span><br>"
                 f"<span class='muted'>{hm(working)} de travail</span>",
                 unsafe_allow_html=True,
             )
-        head[5].markdown(
+        head[4].markdown(
             f"<span style='font-size:.82rem'>{len(items)} acte(s)</span><br>"
             f"<span class='muted'>{urgent_here} urgent(s)</span>",
             unsafe_allow_html=True,

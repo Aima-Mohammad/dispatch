@@ -127,3 +127,30 @@ def test_trusted_caseworkers_come_first() -> None:
     candidates = session.candidates_for("RECL")
     trusted = [c.worker.trusted for c in candidates]
     assert trusted == sorted(trusted, reverse=True)
+
+def test_hold_bin_belongs_to_its_owner() -> None:
+    """Two caseworkers suspend a case each; neither sees the other's."""
+    session = build()
+    first, second = sorted(
+        session.workers, key=lambda w: len(session.workers[w].queue), reverse=True
+    )[:2]
+    a = session.workers[first].queue[0]
+    b = session.workers[second].queue[0]
+    session.hold(first, a.id, HoldReason.MISSING_DOCUMENT)
+    session.hold(second, b.id, HoldReason.THIRD_PARTY)
+
+    assert [i.id for i in session.held_for(first)] == [a.id]
+    assert [i.id for i in session.held_for(second)] == [b.id]
+
+
+def test_resume_clears_the_hold_origin() -> None:
+    """Otherwise held_by keeps pointing at a case that is no longer held."""
+    session = build()
+    worker_id = busiest(session)
+    item = session.workers[worker_id].queue[0]
+    session.hold(worker_id, item.id, HoldReason.THIRD_PARTY)
+
+    session.resume(item.id, worker_id)
+
+    assert session.held_by(item) is None
+    assert session.held_for(worker_id) == []

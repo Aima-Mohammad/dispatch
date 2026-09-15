@@ -66,9 +66,11 @@ def check_draw(
                         )
                     )
 
-    # R3 - Work in hand never exceeds the remaining allocated time.
+    # R3 - SUDE work in hand never exceeds the remaining SUDE time. MH are
+    # carved out of the day before the draw (decision 3.13), so their minutes
+    # are not in this budget and cannot be filled with cases.
     held = sum(effective_minutes(types[i.type_code], ctx.level, policy) for i in ctx.queue)
-    remaining = max(0.0, ctx.allocated_minutes - ctx.minutes_worked)
+    remaining = max(0.0, ctx.available_minutes - ctx.minutes_worked)
     if held + draw.minutes > remaining + 1e-6:
         v.append(
             Violation(
@@ -94,4 +96,4 @@ def check_draw(
 
 def _budget(ctx: DrawContext, types: dict[str, ActType], policy: Policy) -> float:
     held = sum(effective_minutes(types[i.type_code], ctx.level, policy) for i in ctx.queue)
-    return lot_size(ctx.allocated_minutes, ctx.minutes_worked, policy) - held
+    return lot_size(ctx.available_minutes, ctx.minutes_worked, policy) - held

@@ -2,20 +2,22 @@ from datetime import date
 
 from dispatch.app.session import DaySession, WorkerState
 from dispatch.domain.models import REFERENCE_DAY_MINUTES, HoldReason
-from dispatch.sim.fixtures import ACT_TYPES, CASEWORKERS, make_backlog
+from dispatch.sim.fixtures import ACT_TYPES, CASEWORKERS, MH_DAILY_TOTAL, make_backlog
 
 TODAY = date(2026, 8, 25)
-
 
 def build() -> DaySession:
     workers = {c.id: WorkerState(worker=c) for c in CASEWORKERS}
     session = DaySession(
-        today=TODAY, types=ACT_TYPES, backlog=make_backlog(TODAY, seed=3), workers=workers
+        today=TODAY,
+        types=ACT_TYPES,
+        backlog=make_backlog(TODAY, seed=3),
+        workers=workers,
+        mh_total=MH_DAILY_TOTAL,
     )
     for worker_id in workers:
         session.refill(worker_id)
     return session
-
 
 def busiest(session: DaySession) -> str:
     return max(session.workers, key=lambda w: len(session.workers[w].queue))
@@ -127,3 +129,56 @@ def test_trusted_caseworkers_come_first() -> None:
     candidates = session.candidates_for("RECL")
     trusted = [c.worker.trusted for c in candidates]
     assert trusted == sorted(trusted, reverse=True)
+
+def test_hold_bin_belongs_to_its_owner() -> None:
+    """Two caseworkers suspend a case each; neither sees the other's."""
+    session = build()
+    first, second = sorted(
+        session.workers, key=lambda w: len(session.workers[w].queue), reverse=True
+    )[:2]
+    a = session.workers[first].queue[0]
+    b = session.workers[second].queue[0]
+    session.hold(first, a.id, HoldReason.MISSING_DOCUMENT)
+    session.hold(second, b.id, HoldReason.THIRD_PARTY)
+
+    assert [i.id for i in session.held_for(first)] == [a.id]
+    assert [i.id for i in session.held_for(second)] == [b.id]
+
+
+def test_resume_clears_the_hold_origin() -> None:
+    """Otherwise held_by keeps pointing at a case that is no longer held."""
+    session = build()
+    worker_id = busiest(session)
+    item = session.workers[worker_id].queue[0]
+    session.hold(worker_id, item.id, HoldReason.THIRD_PARTY)
+
+    session.resume(item.id, worker_id)
+
+    assert session.held_by(item) is None
+    assert session.held_for(worker_id) == []
+
+def test_mh_reserve_time_before_the_draw() -> None:
+    """A mobilised caseworker gets less SUDE time, and a smaller target."""
+    session = build()
+    worker_id = busiest(session)
+    state = session.workers[worker_id]
+    full_target = session.target(state)
+
+    session.set_mh_mobilised(worker_id, True)
+
+    assert state.mh_quota > 0
+    assert session.sude_minutes(state) < state.working_minutes
+    assert session.target(state) < full_target
+
+
+def test_mh_quota_never_drops_below_what_is_done() -> None:
+    """Demobilising someone must not rewrite what he has already done."""
+    session = build()
+    worker_id = busiest(session)
+    session.set_mh_mobilised(worker_id, True)
+    session.complete_mh(worker_id, 5)
+
+    session.set_mh_mobilised(worker_id, False)
+
+    assert session.workers[worker_id].mh_done == 5
+    assert session.workers[worker_id].mh_quota >= 5

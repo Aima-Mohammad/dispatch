@@ -17,7 +17,14 @@ from dispatch.domain.models import (
     HoldReason,
     WorkItem,
 )
-from dispatch.domain.rules import DEFAULT_POLICY, Policy, effective_minutes, target_points
+from dispatch.domain.rules import (
+    DEFAULT_POLICY,
+    Policy,
+    effective_minutes,
+    slack,
+    split_quota,
+    target_points,
+)
 
 DAY_START_MINUTES = 8 * 60 + 30  # 08:30
 DAY_END_MINUTES = 20 * 60  # 20:00
@@ -33,6 +40,11 @@ class WorkerState:
     queue: list[WorkItem] = field(default_factory=list)
     done: list[WorkItem] = field(default_factory=list)
     lots_served: int = 0
+    # MH: a daily count, not a queue of cases. The tool is given how many to
+    # do, never which ones — there are no identifiers on that side.
+    mh_mobilised: bool = False
+    mh_quota: int = 0
+    mh_done: int = 0
 
     @property
     def on_perimeter(self) -> bool:
@@ -40,9 +52,12 @@ class WorkerState:
 
     @property
     def working_minutes(self) -> int:
-        """What the engine may fill. Overtime is decided by the manager and
-        adds to the day, so it adds to the points target too."""
+        """What the day holds in total, MH included."""
         return self.allocated_minutes + self.overtime_minutes
+
+    @property
+    def mh_left(self) -> int:
+        return max(0, self.mh_quota - self.mh_done)
 
     @property
     def earliest_end(self) -> int:
@@ -70,6 +85,7 @@ class DaySession:
     backlog: list[WorkItem]
     workers: dict[str, WorkerState]
     policy: Policy = DEFAULT_POLICY
+    mh_total: int = 0
     held: list[WorkItem] = field(default_factory=list)
     hold_origin: dict[str, str] = field(default_factory=dict)
     offers: dict[str, list[WorkItem]] = field(default_factory=dict)
@@ -84,16 +100,38 @@ class DaySession:
     def queue_minutes(self, state: WorkerState) -> float:
         return sum(self.minutes_of(i, state.worker.level) for i in state.queue)
 
+    def mh_minutes(self, state: WorkerState) -> float:
+        """Time the MH quota reserves for the whole day, done or not."""
+        return state.mh_quota * self.policy.mh_minutes
+
+    def sude_minutes(self, state: WorkerState) -> int:
+        """Time left for cases once MH are carved out (decision 3.13).
+
+        Computed from the quota, not from progress: the caseworker organises
+        his own day and may do SUDE before MH (decision 3.15), so the
+        reservation must not move when he does.
+        """
+        return max(0, int(state.working_minutes - self.mh_minutes(state)))
+
     def points_earned(self, state: WorkerState) -> float:
         return sum(self.types[i.type_code].points for i in state.done)
 
     def target(self, state: WorkerState) -> float:
-        return target_points(state.working_minutes)
+        """MH earn no points, so they are out of the target too (3.16)."""
+        return target_points(self.sude_minutes(state))
 
     def yield_rate(self, state: WorkerState) -> float:
         if state.minutes_worked <= 0:
             return 0.0
         return self.points_earned(state) * 60 / state.minutes_worked
+
+    @property
+    def mh_done_total(self) -> int:
+        return sum(s.mh_done for s in self.workers.values())
+
+    @property
+    def mh_mobilised_ids(self) -> list[str]:
+        return [w for w, s in self.workers.items() if s.mh_mobilised and s.on_perimeter]
 
     @property
     def urgency_bin(self) -> list[WorkItem]:
@@ -112,14 +150,33 @@ class DaySession:
         """Who suspended this case — the one it goes back to when it wakes."""
         return self.hold_origin.get(item.id)
 
+    def held_for(self, worker_id: str) -> list[WorkItem]:
+        """What this caseworker suspended, most overdue first.
+
+        The bin belongs to whoever filled it: waking a case is his own move,
+        not the manager's (decision 3.11).
+        """
+        items = [i for i in self.held if self.hold_origin.get(i.id) == worker_id]
+        items.sort(key=lambda i: i.due_on)
+        return items
+
+    def held_late_for(self, worker_id: str) -> list[WorkItem]:
+        """Those of them already due or overdue.
+
+        The count exists so that checking the bin does not rest on memory:
+        the deadline keeps running while a case waits (decision 3.8).
+        """
+        return [i for i in self.held_for(worker_id) if slack(self.today, i.due_on) <= 0]
+
     def preview_first_lots(
         self, plan: dict[str, tuple[int, int]], on_date: date
     ) -> dict[str, list[WorkItem]]:
         """Draw tomorrow's opening lots without touching anything.
 
-        The backlog is copied, so the simulation consumes nothing. What it
-        shows is a forecast, not a commitment: the real draw happens on the
-        day, against the stock as it stands then.
+        `plan` maps a caseworker to (allocated minutes, MH quota). The backlog
+        is copied, so the simulation consumes nothing. What it shows is a
+        forecast, not a commitment: the real draw happens on the day, against
+        the stock as it stands then.
         """
         pool = [
             WorkItem(
@@ -152,15 +209,15 @@ class DaySession:
             key=lambda s: (not s.worker.trusted, -s.worker.level),
         )
         for state in order:
-            allocated, overtime = plan.get(state.worker.id, (0, 0))
-            working = allocated + overtime
-            if working <= 0:
+            allocated, mh_quota = plan.get(state.worker.id, (0, 0))
+            available = max(0, int(allocated - mh_quota * self.policy.mh_minutes))
+            if available <= 0:
                 out[state.worker.id] = []
                 continue
             ctx = DrawContext(
                 caseworker_id=state.worker.id,
                 level=state.worker.level,
-                allocated_minutes=working,
+                available_minutes=available,
                 minutes_worked=0.0,
                 points_earned=0.0,
                 queue=[],
@@ -192,6 +249,47 @@ class DaySession:
         eligible.sort(key=lambda s: (not s.worker.trusted, self.queue_minutes(s)))
         return eligible[:limit]
 
+    # ---- MH commands --------------------------------------------------
+
+    def set_mh_mobilised(self, worker_id: str, mobilised: bool) -> None:
+        """Mobilise or release someone on MH, then reshare the daily total."""
+        self.workers[worker_id].mh_mobilised = mobilised
+        self.redistribute_mh()
+
+    def redistribute_mh(self) -> None:
+        """Share the daily MH total across those mobilised, by allocated time.
+
+        Nobody's quota drops below what they have already done: the split
+        would otherwise rewrite history when someone joins or leaves during
+        the day. The team total can then exceed `mh_total` by that much,
+        which is the honest outcome.
+        """
+        weights = {w: self.workers[w].allocated_minutes for w in self.mh_mobilised_ids}
+        shares = split_quota(self.mh_total, weights)
+        for worker_id, state in self.workers.items():
+            if not state.mh_mobilised or not state.on_perimeter:
+                state.mh_quota = state.mh_done
+                continue
+            state.mh_quota = max(shares.get(worker_id, 0), state.mh_done)
+        for worker_id in self.mh_mobilised_ids:
+            self.refill(worker_id)
+
+    def complete_mh(self, worker_id: str, count: int = 1) -> int:
+        """Record MH progress. Their minutes are already reserved, so they do
+        not add to `minutes_worked`, which tracks SUDE only."""
+        state = self.workers[worker_id]
+        done = min(count, state.mh_left)
+        state.mh_done += done
+        if done:
+            self.journal.append(
+                Event(
+                    at=self._clock_label(),
+                    label=f"{state.worker.display_name} — {done} MH traitée(s)",
+                    reference=f"MH {state.mh_done}/{state.mh_quota}",
+                )
+            )
+        return done
+
     # ---- commands -----------------------------------------------------
 
     def refill(self, worker_id: str, minimum_minutes: float = 0.0) -> int:
@@ -201,7 +299,7 @@ class DaySession:
         ctx = DrawContext(
             caseworker_id=worker_id,
             level=state.worker.level,
-            allocated_minutes=state.working_minutes,
+            available_minutes=self.sude_minutes(state),
             minutes_worked=state.minutes_worked,
             points_earned=self.points_earned(state),
             queue=state.queue,
@@ -244,17 +342,25 @@ class DaySession:
 
     def resume(self, item_id: str, to_worker: str | None = None) -> None:
         """Wake a held case. It comes back as an urgency, with priority to the
-        caseworker who suspended it."""
+        caseworker who suspended it.
+
+        `pushed` is set whoever wakes it: after a few days on hold the case is
+        genuinely late, so the urgency label tells the truth.
+        """
         item = next(i for i in self.held if i.id == item_id)
         self.held.remove(item)
+        origin = self.hold_origin.pop(item.id, None)
         item.held_reason = None
         item.pushed = True
         if to_worker and self.workers[to_worker].on_perimeter:
             item.assigned_to = to_worker
             self.workers[to_worker].queue.append(item)
+            self._log(self.workers[to_worker], "réveillé", item)
         else:
             item.assigned_to = None
             self.backlog.append(item)
+            if origin:
+                self._log(self.workers[origin], "délégué en corbeille", item)
 
     def push_urgency(self, item_id: str, worker_id: str | None = None) -> WorkItem:
         """Promote an existing case to urgency.
@@ -293,7 +399,7 @@ class DaySession:
         state = self.workers[worker_id]
         state.allocated_minutes = minutes
         returned = 0
-        room = max(0.0, state.working_minutes - state.minutes_worked)
+        room = max(0.0, self.sude_minutes(state) - state.minutes_worked)
         while self.queue_minutes(state) > room + 1e-6:
             if not state.queue:
                 break
@@ -319,6 +425,10 @@ class DaySession:
         Two limits apply, and both matter: nobody can have worked more than
         the time actually elapsed since opening — minus the assumed break —
         and nobody works beyond their allocated day.
+
+        MH progress with the clock too. Without that, a simulated day would
+        be spent entirely on cases and the mandatory volume would never move,
+        which is precisely what the manager needs to watch.
         """
         span = DAY_END_MINUTES - DAY_START_MINUTES
         self.clock_minutes = min(span, self.clock_minutes + minutes)
@@ -331,10 +441,21 @@ class DaySession:
         for worker_id, state in self.workers.items():
             if not state.on_perimeter:
                 continue
+
+            if state.mh_quota:
+                share = min(1.0, elapsed / max(1, state.working_minutes))
+                expected = min(state.mh_quota, int(round(state.mh_quota * share)))
+                if expected > state.mh_done:
+                    self.complete_mh(worker_id, expected - state.mh_done)
+
             guard = 0
             while guard < 500:
                 guard += 1
-                budget = min(elapsed, state.working_minutes) - state.minutes_worked
+                spent_on_mh = state.mh_done * self.policy.mh_minutes
+                budget = (
+                    min(elapsed - spent_on_mh, self.sude_minutes(state))
+                    - state.minutes_worked
+                )
                 if budget <= 0:
                     break
                 if not state.queue:

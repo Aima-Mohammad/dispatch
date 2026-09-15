@@ -30,30 +30,64 @@ ACT_TYPES: dict[str, ActType] = {
 
 # Roughly 30 cases per caseworker per day, which is what the team actually
 # handles. The mix leans on the shorter acts, as the real flow does.
+# Volumes track the headcount below: thirty-five caseworkers, so about 1050
+# cases a day. Change one and the other must follow, or the lots run dry.
+# Collective daily obligation, all mobilised caseworkers together. Not in the
+# bonus scheme: MH consume time and earn no points (decision 3.16).
+MH_DAILY_TOTAL = 700
+
 DAILY_ARRIVALS: dict[str, int] = {
-    "PRE": 60,
-    "REP": 48,
-    "MAJ": 40,
-    "COT": 34,
-    "ADH": 30,
-    "RAD": 26,
-    "CGR": 20,
-    "NCF": 18,
-    "RECL": 12,
-    "DEC": 8,
+    "PRE": 210,
+    "REP": 168,
+    "MAJ": 140,
+    "COT": 120,
+    "ADH": 105,
+    "RAD": 90,
+    "CGR": 70,
+    "NCF": 63,
+    "RECL": 42,
+    "DEC": 28,
 }
 
+# Thirty-five caseworkers, the real size of the team. Levels are spread as
+# the team is: a quarter junior, half intermediate, a quarter expert. Trust
+# is a working habit, not a rank — it only decides who is suggested first.
 CASEWORKERS: tuple[Caseworker, ...] = (
     Caseworker("g-lea", "Léa M.", 1),
     Caseworker("g-yanis", "Yanis B.", 1),
     Caseworker("g-chloe", "Chloé D.", 1),
+    Caseworker("g-ines", "Inès T.", 1),
+    Caseworker("g-lucas", "Lucas F.", 1),
+    Caseworker("g-sarah", "Sarah K.", 1),
+    Caseworker("g-maxime", "Maxime V.", 1),
+    Caseworker("g-jade", "Jade N.", 1),
+    Caseworker("g-adam", "Adam Z.", 1),
     Caseworker("g-karim", "Karim H.", 2, trusted=True),
     Caseworker("g-sophie", "Sophie R.", 2, trusted=True),
+    Caseworker("g-fatima", "Fatima A.", 2, trusted=True),
+    Caseworker("g-celine", "Céline W.", 2, trusted=True),
     Caseworker("g-thomas", "Thomas G.", 2),
     Caseworker("g-amina", "Amina S.", 2),
     Caseworker("g-julien", "Julien P.", 2),
+    Caseworker("g-david", "David E.", 2),
+    Caseworker("g-emma", "Emma L.", 2),
+    Caseworker("g-rachid", "Rachid O.", 2),
+    Caseworker("g-claire", "Claire B.", 2),
+    Caseworker("g-olivier", "Olivier M.", 2),
+    Caseworker("g-samira", "Samira D.", 2),
+    Caseworker("g-nicolas", "Nicolas C.", 2),
+    Caseworker("g-laure", "Laure J.", 2),
+    Caseworker("g-hugo", "Hugo R.", 2),
+    Caseworker("g-myriam", "Myriam T.", 2),
+    Caseworker("g-antoine", "Antoine F.", 2),
     Caseworker("g-nadia", "Nadia C.", 3, trusted=True),
+    Caseworker("g-patricia", "Patricia G.", 3, trusted=True),
+    Caseworker("g-valerie", "Valérie S.", 3, trusted=True),
     Caseworker("g-marc", "Marc L.", 3),
+    Caseworker("g-bruno", "Bruno P.", 3),
+    Caseworker("g-stephane", "Stéphane A.", 3),
+    Caseworker("g-isabelle", "Isabelle N.", 3),
+    Caseworker("g-gerard", "Gérard V.", 3),
 )
 
 
@@ -68,7 +102,9 @@ def _add_business_days(start: date, days: int) -> date:
     return cursor
 
 
-def make_backlog(today: date, seed: int = 42, overdue_share: float = 0.12) -> list[WorkItem]:
+def make_backlog(
+    today: date, seed: int = 42, overdue_share: float = 0.12
+) -> list[WorkItem]:
     """A plausible backlog: several days of arrivals, each with the due date
     its type implies. A share is already past due.
 

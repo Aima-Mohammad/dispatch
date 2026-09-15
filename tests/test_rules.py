@@ -7,6 +7,7 @@ from dispatch.domain.rules import (
     lot_size,
     required_points,
     slack,
+    split_quota,
     target_points,
 )
 
@@ -41,3 +42,17 @@ def test_lot_shrinks_as_the_day_ends() -> None:
     late = lot_size(REFERENCE_DAY_MINUTES, 400)
     assert early > late
     assert late <= REFERENCE_DAY_MINUTES - 400
+
+
+def test_quota_split_follows_allocated_time() -> None:
+    """A half-day never carries a full day's load, and nothing is lost."""
+    shares = split_quota(700, {"a": 420, "b": 210, "c": 0})
+    assert sum(shares.values()) == 700
+    assert shares["a"] in (2 * shares["b"], 2 * shares["b"] + 1)
+    assert shares["c"] == 0
+
+
+def test_quota_split_is_reproducible() -> None:
+    weights = {f"g{i}": 420 for i in range(20)}
+    reversed_weights = dict(reversed(list(weights.items())))
+    assert split_quota(700, weights) == split_quota(700, reversed_weights)

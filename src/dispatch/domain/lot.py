@@ -25,11 +25,16 @@ from dispatch.domain.rules import (
 
 @dataclass(slots=True)
 class DrawContext:
-    """Everything the engine needs to serve one caseworker, at one moment."""
+    """Everything the engine needs to serve one caseworker, at one moment.
+
+    `available_minutes` is the SUDE time, not the whole day: MH are carved
+    out before the draw, so the engine never hands out work the caseworker
+    has no time left for (decision 3.13).
+    """
 
     caseworker_id: str
     level: int
-    allocated_minutes: int
+    available_minutes: int
     minutes_worked: float
     points_earned: float
     queue: list[WorkItem] = field(default_factory=list)
@@ -68,15 +73,17 @@ def draw_lot(
     put on hold frees a slot that must be filled straight away.
     """
     held = _queue_minutes(ctx, types, policy)
-    budget = lot_size(ctx.allocated_minutes, ctx.minutes_worked, policy) - held
-    remaining = ctx.allocated_minutes - ctx.minutes_worked - held
+    budget = lot_size(ctx.available_minutes, ctx.minutes_worked, policy) - held
+    remaining = ctx.available_minutes - ctx.minutes_worked - held
     if minimum_minutes:
         budget = max(budget, minimum_minutes)
     budget = min(budget, remaining)
     if budget <= 2:
         return Draw([], 0.0, reason)
 
-    behind = ctx.points_earned < required_points(ctx.allocated_minutes, ctx.minutes_worked)
+    behind = ctx.points_earned < required_points(
+        ctx.available_minutes, ctx.minutes_worked
+    )
     in_lot = {i.type_code for i in ctx.queue}
     picked: list[WorkItem] = []
     used = 0.0
